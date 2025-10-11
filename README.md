@@ -22,8 +22,8 @@
 
 1. **Clone this repository:**
     ```
-    git clone https://github.com/yourusername/sharpner.git
-    cd sharpner
+    git clone https://github.com/Piyush-xo-19/AUTO-ML-.git
+    cd Gothgpt
     ```
 
 2. **Install dependencies:**
