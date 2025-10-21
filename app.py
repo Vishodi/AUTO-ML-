@@ -16,6 +16,8 @@ from sklearn.metrics import (
 )
 from sklearn.preprocessing import LabelEncoder
 import math
+import io
+import pickle
 
 st.set_page_config(page_title="GOTH GPT ", layout="wide")
 
@@ -127,14 +129,18 @@ if st.session_state.page == "upload":
                         X[col] = X[col].fillna(fill_val)
                     else:
                         X[col] = X[col].fillna(X[col].median())
-            for col in X.columns:
+            encoders = {}
+            # iterate over a list to avoid issues when dropping columns inside loop
+            for col in list(X.columns):
                 if X[col].dtype == "object":
                     if X[col].nunique() > 50:
                         X = X.drop(columns=[col])
+                        drop_cols.append(col)
                     else:
                         le = LabelEncoder()
                         X[col] = le.fit_transform(X[col].astype(str))
-            return X
+                        encoders[col] = le
+            return X, encoders, drop_cols
 
         def preprocess_target(y):
             if y.dtype == 'object':
@@ -154,7 +160,7 @@ if st.session_state.page == "upload":
                     if working_df.dropna().shape[0] < 10:
                         st.error("Not enough rows for training after cleaning.")
                     else:
-                        X = preprocess_features(working_df, features)
+                        X, feature_encoders, dropped_features = preprocess_features(working_df, features)
                         y_processed, target_encoder = preprocess_target(working_df[target])
                         problem_type = detect_problem_type(working_df, target)
                         if problem_type == "Regression":
@@ -185,11 +191,14 @@ if st.session_state.page == "upload":
 
                             results = {}
                             preds_test_dict = {}
+                            trained_models = {}
 
                             with st.spinner("Training selected models..."):
                                 for mdl in selected_models:
                                     model = model_defs[mdl]
                                     model.fit(X_train, y_train)
+                                    # store the trained model for later packaging
+                                    trained_models[mdl] = model
                                     train_preds = model.predict(X_train)
                                     test_preds = model.predict(X_test)
                                     preds_test_dict[mdl] = test_preds
@@ -273,6 +282,39 @@ if st.session_state.page == "upload":
                                             ax_cm.set_yticklabels(class_labels, rotation=0, fontsize=8)
                                             plt.tight_layout(pad=1.2)
                                             st.pyplot(fig_cm, use_container_width=False)
+                            # --- Add best-model selection and download ---
+                            if trained_models:
+                                # choose primary metric index
+                                sample_metrics = list(results.values())[0]["metrics"]
+                                if problem_type == "Regression":
+                                    metric_index = sample_metrics.index("R2") if "R2" in sample_metrics else 0
+                                else:
+                                    metric_index = sample_metrics.index("F1") if "F1" in sample_metrics else 0
+
+                                best_model_name = max(trained_models.keys(), key=lambda m: results[m]["test"][metric_index])
+                                best_model = trained_models[best_model_name]
+                                best_metric_value = results[best_model_name]["test"][metric_index]
+
+                                st.markdown(
+                                    f"**Best Model:** {best_model_name} — Test {sample_metrics[metric_index]} = {best_metric_value:.3f}"
+                                )
+
+                                export_obj = {
+                                    "model": best_model,
+                                    "feature_columns": X.columns.tolist(),
+                                    "feature_encoders": feature_encoders,
+                                    "target_encoder": target_encoder,
+                                    "problem_type": problem_type,
+                                    "dropped_features": dropped_features
+                                }
+                                bytes_out = pickle.dumps(export_obj)
+                                st.download_button(
+                                    "Download Best Model",
+                                    data=bytes_out,
+                                    file_name=f"{best_model_name.replace(' ', '_')}_model.pkl",
+                                    mime="application/octet-stream",
+                                    help="Contains model and preprocessing encoders (pickle)."
+                                )
                 except Exception as e:
                     st.error(f"An error occurred: {str(e)}")
                     st.error("Check your data for missing values, text columns, or insufficient samples.")

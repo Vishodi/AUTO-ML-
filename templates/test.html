@@ -1,0 +1,132 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Model Tester</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#111; color:#e8e8ef; padding:20px; }
+    .card { background:#171726; padding:18px; border-radius:8px; max-width:900px; margin:12px auto; box-shadow:0 6px 18px rgba(0,0,0,0.6); }
+    label { display:block; margin-top:10px; font-size:0.95rem; }
+    input[type="text"], select { width:100%; padding:8px; border-radius:6px; border:1px solid #2b2b3b; background:#0f0f18; color:#fff; margin-top:6px; }
+    button { margin-top:12px; padding:10px 14px; border:none; border-radius:6px; background:#4f8bff; color:#fff; cursor:pointer; }
+    .row { display:flex; gap:14px; flex-wrap:wrap; }
+    .col { flex:1 1 220px; min-width:180px; }
+    .result { margin-top:12px; padding:10px; background:#0b0b10; border-radius:6px; }
+    .muted { color:#9aa0b8; font-size:0.9rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Upload model (.pkl) and test</h2>
+    <p class="muted">This page expects a packaged model pickle (dict) created by the AutoML app (contains model, feature_columns, encoders).</p>
+
+    <input type="file" id="model_file" accept=".pkl" />
+    <button id="uploadBtn">Upload model</button>
+
+    <div id="meta" style="margin-top:12px;"></div>
+
+    <form id="featureForm" style="margin-top:12px; display:none;">
+      <div id="fields" class="row"></div>
+      <button type="button" id="predictBtn">Predict</button>
+    </form>
+
+    <div id="out" class="result" style="display:none;"></div>
+  </div>
+
+  <script>
+    let currentModel = null;
+    document.getElementById('uploadBtn').addEventListener('click', async () => {
+      const fileEl = document.getElementById('model_file');
+      if (!fileEl.files || fileEl.files.length === 0) {
+        alert('Select a .pkl model file first.');
+        return;
+      }
+      const fd = new FormData();
+      fd.append('model', fileEl.files[0]);
+      document.getElementById('meta').innerText = 'Uploading...';
+      try {
+        const resp = await fetch('/upload_model', { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (!resp.ok || data.status !== 'ok') {
+          document.getElementById('meta').innerText = 'Error: ' + (data.message || resp.statusText);
+          return;
+        }
+        currentModel = data;
+        document.getElementById('meta').innerText = 'Model loaded. Problem type: ' + data.problem_type;
+        renderFields(data.feature_columns, data.encoder_options || {});
+      } catch (e) {
+        document.getElementById('meta').innerText = 'Upload failed: ' + e;
+      }
+    });
+
+    function renderFields(features, encoderOptions) {
+      const fields = document.getElementById('fields');
+      fields.innerHTML = '';
+      features.forEach(f => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'col';
+        const label = document.createElement('label');
+        label.innerText = f;
+        wrapper.appendChild(label);
+
+        if (encoderOptions && encoderOptions[f] && encoderOptions[f].length > 0) {
+          const sel = document.createElement('select');
+          sel.name = f;
+          // add empty option
+          const emptyOpt = document.createElement('option'); emptyOpt.value=''; emptyOpt.innerText='(blank)';
+          sel.appendChild(emptyOpt);
+          encoderOptions[f].forEach(opt => {
+            const o = document.createElement('option');
+            o.value = opt; o.innerText = opt;
+            sel.appendChild(o);
+          });
+          wrapper.appendChild(sel);
+        } else {
+          const inp = document.createElement('input');
+          inp.type = 'text';
+          inp.name = f;
+          inp.placeholder = 'Enter value';
+          wrapper.appendChild(inp);
+        }
+        fields.appendChild(wrapper);
+      });
+      document.getElementById('featureForm').style.display = 'block';
+      document.getElementById('out').style.display = 'none';
+    }
+
+    document.getElementById('predictBtn').addEventListener('click', async () => {
+      if (!currentModel) {
+        alert('Upload a model first.');
+        return;
+      }
+      const form = document.getElementById('featureForm');
+      const fd = new FormData(form);
+      const inputs = {};
+      for (const [k, v] of fd.entries()) {
+        inputs[k] = v;
+      }
+      const body = { model_id: currentModel.model_id, inputs: inputs };
+      document.getElementById('out').style.display = 'block';
+      document.getElementById('out').innerText = 'Predicting...';
+      try {
+        const resp = await fetch('/predict', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.status !== 'ok') {
+          document.getElementById('out').innerText = 'Error: ' + (data.message || resp.statusText);
+          return;
+        }
+        let html = '<strong>Prediction:</strong> ' + data.prediction;
+        if (data.raw !== undefined) html += '<br/><small class="muted">Raw output: ' + data.raw + '</small>';
+        if (data.probabilities) html += '<br/><small class="muted">Probabilities: ' + JSON.stringify(data.probabilities) + '</small>';
+        document.getElementById('out').innerHTML = html;
+      } catch (e) {
+        document.getElementById('out').innerText = 'Prediction error: ' + e;
+      }
+    });
+  </script>
+</body>
+</html>
